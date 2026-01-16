@@ -1,0 +1,36 @@
+services:
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongodb
+      - redis
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/mydb
+      - REDIS_URL=redis://redis:6379
+      - BACKEND_PORT=8000
+
+  worker:
+    build: ./worker
+    container_name: worker
+    depends_on:
+      - backend
+      - redis
+      - mongodb
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/mydb
+      - REDIS_URL=redis://redis:6379
+
+  redis:
+    image: "redis:alpine"
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  mongodb:
+    image: "mongo:latest"
+    container_name: mongodb
+    ports:
+      - "27017:27017"
