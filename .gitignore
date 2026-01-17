@@ -35,3 +35,18 @@ Desktop.ini
 # local notes/assets
 /1.md
 /*.pdf
+/mistakes.json
+
+# local demos
+/asr_demo.py
+/pypdf_demo.py
+/kimi_pdf_demo.py
+/groq_asr_demo.py
+
+# frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.env
+
+# uploads
+/storage/

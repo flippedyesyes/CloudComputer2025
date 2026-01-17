@@ -57,3 +57,25 @@ worker/
     ├── coach.py                # 学习教练任务：生成针对学生薄弱点的个性化学习建议
     └── tutor.py                # Tutor 对话任务：执行引导式教学对话逻辑并维护会话状态
 ```
+
+## Frontend（Vite + React）
+
+```
+cd frontend
+npm install
+copy .env.example .env
+npm run dev
+```
+
+- 默认 API 地址：`http://localhost:8000`（可在 `frontend/.env` 配置 `VITE_API_BASE_URL`）
+- 上传的文件会保存到 `storage/uploads`，worker 会读取同一路径进行解析
+
+## 一键容器启动（含前端）
+
+```
+docker compose up -d --build
+```
+
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:8000`
+- 若部署到云主机，需将 `VITE_API_BASE_URL` 改为公网后端地址

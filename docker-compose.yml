@@ -7,9 +7,20 @@ services:
     depends_on:
       - mongodb
       - redis
+    volumes:
+      - ./storage:/app/storage
     environment:
       - MONGO_URI=mongodb://mongodb:27017/mydb
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-learning_agent}
       - REDIS_URL=redis://redis:6379
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - KIMI_MODEL=${KIMI_MODEL:-moonshot-v1-8k}
+      - CONTEXT_MAX_CHARS=${CONTEXT_MAX_CHARS:-10000}
+      - SUMMARY_MAX_CHARS=${SUMMARY_MAX_CHARS:-10000}
+      - SUMMARY_CHUNK_CHARS=${SUMMARY_CHUNK_CHARS:-4000}
+      - UPLOAD_DIR=${UPLOAD_DIR:-/app/storage/uploads}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       - BACKEND_PORT=8000
 
   worker:
@@ -19,9 +30,28 @@ services:
       - backend
       - redis
       - mongodb
+    volumes:
+      - ./storage:/app/storage
     environment:
       - MONGO_URI=mongodb://mongodb:27017/mydb
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-learning_agent}
       - REDIS_URL=redis://redis:6379
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - KIMI_MODEL=${KIMI_MODEL:-moonshot-v1-8k}
+      - CONTEXT_MAX_CHARS=${CONTEXT_MAX_CHARS:-10000}
+      - SUMMARY_MAX_CHARS=${SUMMARY_MAX_CHARS:-10000}
+      - SUMMARY_CHUNK_CHARS=${SUMMARY_CHUNK_CHARS:-4000}
+
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
 
   redis:
     image: "redis:alpine"

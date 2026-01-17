@@ -1,15 +1,39 @@
-# 提交作答
-# 投递 grade_attempt job
-# 查询判卷结果
+from typing import Any, Dict
 
-from fastapi import APIRouter
+from bson.errors import InvalidId
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from app.jobs.queue import queue
+from app.services.attempt_service import create_attempt, get_attempt
 
 router = APIRouter()
 
-@router.post("/{quiz_id}/submit")
-def submit_attempt(quiz_id: str):
-    return {"attempt_id": "demo", "status": "grading"}
+
+class AttemptCreateRequest(BaseModel):
+    student_id: str = "demo_user"
+    answers: Dict[str, Any]
+
+
+class AttemptCreateResponse(BaseModel):
+    id: str
+    status: str
+    job_id: str
+
+
+@router.post("/{quiz_id}/submit", response_model=AttemptCreateResponse)
+def submit_attempt(quiz_id: str, payload: AttemptCreateRequest):
+    attempt = create_attempt(quiz_id, payload.student_id, payload.answers)
+    job = queue.enqueue("tasks.grade_attempt.grade_attempt", attempt["id"])
+    return {"id": attempt["id"], "status": attempt["status"], "job_id": job.id}
+
 
 @router.get("/{attempt_id}")
-def get_attempt(attempt_id: str):
-    return {"attempt_id": attempt_id, "status": "done"}
+def get_attempt_detail(attempt_id: str):
+    try:
+        attempt = get_attempt(attempt_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="invalid attempt_id")
+    if not attempt:
+        raise HTTPException(status_code=404, detail="attempt not found")
+    return attempt
