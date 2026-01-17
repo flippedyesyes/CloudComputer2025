@@ -1,10 +1,19 @@
-# 不仅仅是 text，还承载：
-# ingest 状态
-# 后续知识拆解的来源
+from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
+
 class Material(BaseModel):
-    id: str
-    content: str
-    status: str  # uploaded / ingested
+    id: Optional[str] = None
+    notebook_id: str
+    title: str
+    source_type: str  # text/pdf/docx/audio
+    material_type: str  # textbook/note/handout/other
+    is_primary: bool = False
+    status: str = "uploaded"
+    file_url: Optional[str] = None
+    text_chunk_count: int = 0
+    summary_chunk_count: int = 0
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
