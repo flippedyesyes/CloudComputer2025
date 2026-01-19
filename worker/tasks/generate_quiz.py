@@ -7,6 +7,10 @@ from bson import ObjectId
 from openai import OpenAI
 from pymongo import MongoClient
 
+from checkers.gate import run_with_checker
+from checkers.quiz_check import QuizCheck
+from checkers.base import CheckStatus
+
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongodb:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "learning_agent")
 KIMI_API_KEY = os.getenv("MOONSHOT_API_KEY")
@@ -331,9 +335,17 @@ def generate_quiz(quiz_id: str):
                 + "\n"
             )
 
-        raw = _call_kimi(prompt)
-        questions = _parse_questions(raw)
-        _validate_questions(questions, num_questions)
+        questions, check_result = run_with_checker(
+            prompt=prompt,
+            call_llm=_call_kimi,
+            checker=QuizCheck(expected_count=num_questions),
+            context={"expected_count": num_questions},
+            max_retries=2,
+        )
+
+        # For safety: if the check layer escalates, fail the job explicitly.
+        if check_result.status == CheckStatus.ESCALATE or not questions:
+            raise ValueError(f"quiz check failed: {check_result.reason}")
 
         # LLM may return more/less than requested. We make this robust so the UI
         # won't stay in "processing" due to a strict count check.

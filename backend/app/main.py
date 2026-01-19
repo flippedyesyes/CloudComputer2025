@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.jobs.queue import queue
-from app.api import materials, quizzes, attempts, mistakes, tutor, knowledge
+from app.api import materials, quizzes, attempts, mistakes, tutor, knowledge, coach
 
 app = FastAPI(title="Learning Evaluation Agent")
 
@@ -26,6 +26,7 @@ app.include_router(materials.router, prefix="/materials")
 app.include_router(quizzes.router, prefix="/quizzes")
 app.include_router(attempts.router, prefix="/attempts")
 app.include_router(mistakes.router, prefix="/mistakes")
+app.include_router(coach.router, prefix="/coach")
 app.include_router(tutor.router, prefix="/tutor")
 app.include_router(knowledge.router, prefix="/knowledge")
 

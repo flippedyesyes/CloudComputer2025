@@ -10,6 +10,8 @@ class Mistake(BaseModel):
     student_id: str
     question_id: str
     wrong_count: int = 0
+    # M3: persist missing_points from grading so Coach can be grounded
+    missing_points: List[str] = Field(default_factory=list)
     error_tags: List[str] = Field(default_factory=list)
     knowledge_points: List[str] = Field(default_factory=list)
     last_error_analysis: Optional[str] = None

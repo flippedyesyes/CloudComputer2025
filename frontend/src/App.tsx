@@ -59,6 +59,50 @@ type Mistake = {
   wrong_count: number;
 };
 
+// ---------------- M3: Coach ----------------
+type CoachPlanDoc = {
+  id: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  plan?: {
+    diagnosis?: {
+      summary?: string;
+      key_weak_node_ids?: string[];
+      top_error_tags?: string[];
+      top_missing_points?: string[];
+    };
+    corrective_actions?: Array<{
+      issue?: string;
+      how_to_fix?: string;
+      evidence?: {
+        missing_points?: string[];
+        error_tags?: string[];
+        weak_node_ids?: string[];
+      };
+    }>;
+    practice_plan?: Array<{
+      level?: "L1" | "L2";
+      focus_node_ids?: string[];
+      num_questions?: number;
+      notes?: string;
+    }>;
+    one_click_practice?: {
+      node_id?: string | null;
+      num_questions?: number;
+      difficulty_mix?: Record<string, number>;
+      type_mix?: Record<string, number>;
+      material_ids?: string[];
+    };
+  };
+};
+
+// ---------------- M3: Tutor ----------------
+type TutorMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 // ---------------- M2: Knowledge tree ----------------
 type KnowledgeNode = {
   id: string;
@@ -118,6 +162,20 @@ export default function App() {
   const [attemptId, setAttemptId] = useState("");
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [mistakes, setMistakes] = useState<Mistake[]>([]);
+
+  // ---- M3: Coach state ----
+  const [coachStatus, setCoachStatus] = useState("");
+  const [coachPlanDoc, setCoachPlanDoc] = useState<CoachPlanDoc | null>(null);
+
+  // ---- M3: Tutor state ----
+  const [tutorOpen, setTutorOpen] = useState(false);
+  const [tutorQuestionId, setTutorQuestionId] = useState<string>("");
+  const [tutorSessionId, setTutorSessionId] = useState<string>("");
+  const [tutorLevel, setTutorLevel] = useState<string>("L0");
+  const [tutorTurn, setTutorTurn] = useState<number>(0);
+  const [tutorMessages, setTutorMessages] = useState<TutorMessage[]>([]);
+  const [tutorInput, setTutorInput] = useState<string>("");
+  const [tutorGiveUp, setTutorGiveUp] = useState<boolean>(false);
 
   // ---- M2 state ----
   const [knowledgeTree, setKnowledgeTree] = useState<KnowledgeNode[]>([]);
@@ -356,6 +414,182 @@ export default function App() {
       setMistakes(data.mistakes || []);
     } catch (err) {
       setMessage(`读取错题失败：${(err as Error).message}`);
+    }
+  };
+
+  // ---------------- M3: Coach ----------------
+  const fetchCoachLatest = async () => {
+    const url = new URL(`${apiBase}/coach/latest`);
+    url.searchParams.set("student_id", studentId.trim());
+    if (notebookId.trim()) url.searchParams.set("notebook_id", notebookId.trim());
+    if (treeMaterialId.trim()) url.searchParams.set("material_id", treeMaterialId.trim());
+    return fetchJson<{ plan: CoachPlanDoc | null }>(url.toString());
+  };
+
+  const generateCoach = async () => {
+    if (!studentId.trim()) {
+      setMessage("请先填写 student_id");
+      return;
+    }
+    setCoachStatus("生成小灶建议中...");
+    setCoachPlanDoc(null);
+    try {
+      await fetchJson<{ status: string; job_id: string }>(`${apiBase}/coach/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_id: studentId.trim(),
+          notebook_id: notebookId.trim() || null,
+          material_id: treeMaterialId.trim() || null,
+          days: 14,
+          top_k: 5,
+        }),
+      });
+
+      // Poll latest plan
+      for (let i = 0; i < 20; i += 1) {
+        const data = await fetchCoachLatest();
+        if (data.plan) {
+          setCoachPlanDoc(data.plan);
+          setCoachStatus(data.plan.status === "failed" ? "小灶建议生成失败" : "小灶建议已生成");
+          return;
+        }
+        await sleep(1500);
+      }
+      setCoachStatus("小灶建议仍在生成中，请稍后再点‘刷新’或查看 worker 日志");
+    } catch (err) {
+      setCoachStatus("");
+      setMessage(`生成小灶建议失败：${(err as Error).message}`);
+    }
+  };
+
+  const refreshCoach = async () => {
+    try {
+      const data = await fetchCoachLatest();
+      setCoachPlanDoc(data.plan);
+      setCoachStatus(data.plan ? (data.plan.status === "failed" ? "小灶建议生成失败" : "小灶建议已生成") : "暂无小灶建议");
+    } catch (err) {
+      setMessage(`刷新小灶建议失败：${(err as Error).message}`);
+    }
+  };
+
+  const oneClickPractice = async () => {
+    const oc = coachPlanDoc?.plan?.one_click_practice;
+    if (!oc) {
+      setMessage("暂无可用的一键再练计划");
+      return;
+    }
+    const materialIds = (oc.material_ids && oc.material_ids.length > 0)
+      ? oc.material_ids
+      : (treeMaterialId ? [treeMaterialId] : selectedMaterialIds);
+    if (materialIds.length === 0) {
+      setMessage("缺少 material_ids：请先上传材料并在‘材料列表’勾选或选择知识树 material");
+      return;
+    }
+
+    try {
+      setQuizStatus("一键再练出题中...");
+      const payload = {
+        notebook_id: notebookId,
+        material_ids: materialIds,
+        num_questions: Math.max(1, Math.min(5, oc.num_questions || 5)),
+        node_id: oc.node_id || undefined,
+        type_mix: oc.type_mix || undefined,
+        difficulty_mix: oc.difficulty_mix || undefined,
+      };
+      const data = await fetchJson<{ id: string; status: string }>(`${apiBase}/quizzes/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setQuizId(data.id);
+      setQuestions([]);
+      setAnswers({});
+      await pollQuiz(data.id);
+      setMessage("已按小灶建议生成‘再练’测验");
+    } catch (err) {
+      setMessage(`一键再练失败：${(err as Error).message}`);
+    }
+  };
+
+  // ---------------- M3: Tutor ----------------
+  const startTutorForQuestion = async (q: Question) => {
+    const grading = gradingMap.get(q.id);
+    const missing = grading?.result?.missing_points || [];
+    const tags = grading?.result?.error_tags || [];
+
+    setTutorOpen(true);
+    setTutorQuestionId(q.id);
+    setTutorMessages([
+      { role: "assistant", content: "我们来一步步把这题做对。先从你的思路开始。" },
+    ]);
+    setTutorInput("");
+    setTutorGiveUp(false);
+
+    try {
+      const start = await fetchJson<{ session_id: string; hint_level: string; turn: number }>(`${apiBase}/tutor/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_id: studentId.trim(),
+          question_id: q.id,
+          stem: q.stem,
+          student_answer: answers[q.id] || "",
+          missing_points: missing,
+          error_tags: tags,
+          weak_node_ids: [],
+          hint_level: "L0",
+        }),
+      });
+      setTutorSessionId(start.session_id);
+      setTutorLevel(start.hint_level);
+      setTutorTurn(start.turn);
+
+      // Auto fetch the first hint
+      const first = await fetchJson<{ assistant: any; hint_level: string; turn: number }>(`${apiBase}/tutor/next`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: start.session_id, message: "", give_up: false }),
+      });
+      const hint = first.assistant?.hint || first.assistant?.question || JSON.stringify(first.assistant);
+      const ask = first.assistant?.question ? `\n\n👉 ${first.assistant.question}` : "";
+      setTutorMessages((prev) => [...prev, { role: "assistant", content: `${hint}${ask}` }]);
+      setTutorLevel(first.hint_level || start.hint_level);
+      setTutorTurn(first.turn || start.turn + 1);
+    } catch (err) {
+      setMessage(`Tutor 启动失败：${(err as Error).message}`);
+    }
+  };
+
+  const sendTutor = async () => {
+    if (!tutorSessionId) {
+      setMessage("Tutor session 未创建");
+      return;
+    }
+    const text = tutorInput.trim();
+    if (!text && !tutorGiveUp) {
+      setMessage("请输入你的想法，或勾选‘我放弃’获取最终解答");
+      return;
+    }
+    if (text) {
+      setTutorMessages((prev) => [...prev, { role: "user", content: text }]);
+    }
+    setTutorInput("");
+
+    try {
+      const data = await fetchJson<{ assistant: any; hint_level: string; turn: number }>(`${apiBase}/tutor/next`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: tutorSessionId, message: text, give_up: tutorGiveUp }),
+      });
+      const hint = data.assistant?.hint || data.assistant?.answer || "";
+      const q = data.assistant?.question ? `\n\n👉 ${data.assistant.question}` : "";
+      const final = data.assistant?.final_answer ? `\n\n✅ 最终：${data.assistant.final_answer}` : "";
+      setTutorMessages((prev) => [...prev, { role: "assistant", content: `${hint}${q}${final}`.trim() || JSON.stringify(data.assistant) }]);
+      setTutorLevel(data.hint_level || tutorLevel);
+      setTutorTurn(data.turn || tutorTurn + 1);
+    } catch (err) {
+      setMessage(`Tutor 失败：${(err as Error).message}`);
     }
   };
 
@@ -688,6 +922,17 @@ export default function App() {
                         <span>判定：{isCorrect ? "正确" : "错误"}</span>
                         <span>错题本：{mistakeAdded ? "已加入" : "未加入"}</span>
                       </div>
+                      {isCorrect === false && (
+                        <div className="grading-actions">
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => startTutorForQuestion(q)}
+                          >
+                            Tutor 引导
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -703,9 +948,98 @@ export default function App() {
                 <strong>{attempt.score ?? "--"}</strong>
               </p>
               {attemptId && <p className="muted">attempt_id: {attemptId}</p>}
+
+              {/* ---------------- M3 entry buttons ---------------- */}
+              <div className="result-actions">
+                <button
+                  type="button"
+                  onClick={generateCoach}
+                  disabled={attempt.status !== "done"}
+                  title={attempt.status !== "done" ? "请先完成判卷" : "基于错题聚合生成小灶建议"}
+                >
+                  生成小灶建议
+                </button>
+                <button type="button" className="ghost" onClick={refreshCoach}>
+                  刷新小灶建议
+                </button>
+                {coachStatus && <span className="muted">{coachStatus}</span>}
+              </div>
+
+              {coachPlanDoc?.plan && (
+                <div className="coach">
+                  <div className="coach__header">
+                    <h3>小灶建议（Coach）</h3>
+                    <button type="button" onClick={oneClickPractice}>
+                      一键再练
+                    </button>
+                  </div>
+                  <p className="muted">
+                    {coachPlanDoc.plan.diagnosis?.summary || "（暂无摘要）"}
+                  </p>
+                  {coachPlanDoc.plan.corrective_actions && coachPlanDoc.plan.corrective_actions.length > 0 && (
+                    <div className="coach__grid">
+                      {coachPlanDoc.plan.corrective_actions.slice(0, 3).map((a, idx) => (
+                        <div key={idx} className="coach__item">
+                          <strong>{a.issue || `建议 ${idx + 1}`}</strong>
+                          <p>{a.how_to_fix}</p>
+                          <div className="coach__evidence">
+                            {a.evidence?.missing_points?.length ? (
+                              <span>缺失点：{a.evidence.missing_points.join("，")}</span>
+                            ) : null}
+                            {a.evidence?.error_tags?.length ? (
+                              <span>错因标签：{a.evidence.error_tags.join("，")}</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
+
+        {/* ---------------- M3: Tutor panel (minimal) ---------------- */}
+        {tutorOpen && (
+          <section className="card" style={cardStyle(4.5)}>
+            <h2>5.1 Tutor 引导（Hint ladder）</h2>
+            <p className="muted">
+              当前题目：<strong>{tutorQuestionId || "--"}</strong> · level：<strong>{tutorLevel}</strong> · turn：<strong>{tutorTurn}</strong>
+            </p>
+            <div className="tutor">
+              <div className="tutor__log">
+                {tutorMessages.map((m, idx) => (
+                  <div key={idx} className={m.role === "assistant" ? "tutor__msg tutor__msg--a" : "tutor__msg tutor__msg--u"}>
+                    {m.content}
+                  </div>
+                ))}
+              </div>
+              <div className="tutor__controls">
+                <textarea
+                  rows={2}
+                  placeholder="输入你的思路（或勾选‘我放弃’拿最终解答）"
+                  value={tutorInput}
+                  onChange={(e) => setTutorInput(e.target.value)}
+                />
+                <div className="tutor__row">
+                  <label className="toggle">
+                    <input type="checkbox" checked={tutorGiveUp} onChange={(e) => setTutorGiveUp(e.target.checked)} />
+                    我放弃（允许 FINAL）
+                  </label>
+                  <div className="tutor__actions">
+                    <button type="button" className="ghost" onClick={() => setTutorOpen(false)}>
+                      关闭
+                    </button>
+                    <button type="button" onClick={sendTutor}>
+                      发送
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         <section className="card" style={cardStyle(5)}>
           <h2>6. 错题与薄弱点</h2>

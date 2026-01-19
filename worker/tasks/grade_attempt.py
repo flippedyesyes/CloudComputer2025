@@ -7,6 +7,10 @@ from bson import ObjectId
 from openai import OpenAI
 from pymongo import MongoClient
 
+from checkers.gate import run_with_checker
+from checkers.grade_check import GradeCheck
+from checkers.base import CheckStatus
+
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongodb:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "learning_agent")
 KIMI_API_KEY = os.getenv("MOONSHOT_API_KEY")
@@ -84,10 +88,15 @@ def _grade_short_answer(question: Dict[str, Any], answer: Any) -> Dict[str, Any]
         f"Knowledge points: {knowledge_points}\n"
         f"Student answer: {answer}\n"
     )
-    raw = _call_kimi(prompt)
-    result = _parse_grade(raw)
-    if "score" not in result:
-        raise ValueError("grading result missing score")
+    result, check_result = run_with_checker(
+        prompt=prompt,
+        call_llm=_call_kimi,
+        checker=GradeCheck(),
+        context={},
+        max_retries=2,
+    )
+    if check_result.status == CheckStatus.ESCALATE or not isinstance(result, dict):
+        raise ValueError(f"grade check failed: {check_result.reason}")
     return result
 
 
@@ -130,6 +139,7 @@ def _update_mistakes(
     student_id: str,
     notebook_id: str,
     question_id: str,
+    missing_points: List[str],
     error_tags: List[str],
     error_analysis: str,
     knowledge_points: List[str],
@@ -141,6 +151,7 @@ def _update_mistakes(
             "$set": {"last_wrong_at": datetime.utcnow(), "last_error_analysis": error_analysis},
             "$inc": {"wrong_count": 1},
             "$addToSet": {
+                "missing_points": {"$each": missing_points},
                 "error_tags": {"$each": error_tags},
                 "knowledge_points": {"$each": knowledge_points},
             },
@@ -232,6 +243,7 @@ def grade_attempt(attempt_id: str):
                     attempt.get("student_id", "demo_user"),
                     quiz.get("notebook_id"),
                     qid,
+                    result.get("missing_points", []),
                     result.get("error_tags", []),
                     result.get("error_analysis", ""),
                     knowledge_points,

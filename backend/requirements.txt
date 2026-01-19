@@ -4,3 +4,4 @@ redis
 rq
 pymongo
 python-multipart
+openai
