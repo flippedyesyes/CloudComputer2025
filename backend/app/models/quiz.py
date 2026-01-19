@@ -8,6 +8,8 @@ class Quiz(BaseModel):
     id: Optional[str] = None
     notebook_id: str
     material_ids: List[str] = Field(default_factory=list)
+    # M2：按知识点/章节范围出题（可选）
+    node_id: Optional[str] = None
     status: str = "generating"
     question_ids: List[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None

@@ -14,6 +14,10 @@ class QuizGenerateRequest(BaseModel):
     notebook_id: str
     material_ids: List[str]
     num_questions: int = 5
+
+    # M2：按知识点/章节出题（可选）
+    node_id: Optional[str] = None
+
     difficulty: Optional[str] = None
     question_types: Optional[List[str]] = None
     type_mix: Optional[dict] = None

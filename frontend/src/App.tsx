@@ -18,6 +18,7 @@ type Material = {
 type Quiz = {
   id: string;
   status: string;
+  error_message?: string;
 };
 
 type Question = {
@@ -56,6 +57,25 @@ type Mistake = {
   knowledge_points: string[];
   last_error_analysis?: string;
   wrong_count: number;
+};
+
+// ---------------- M2: Knowledge tree ----------------
+type KnowledgeNode = {
+  id: string;
+  title: string;
+  level: number;
+  order: number;
+  parent_id?: string | null;
+  mastery_score?: number;
+  // backend variants (some implementations use different field names)
+  mastery?: number;
+  mastery_percent?: number;
+  children?: KnowledgeNode[];
+};
+
+type KnowledgeTreeResponse = {
+  material_id: string;
+  tree: KnowledgeNode[];
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,6 +119,12 @@ export default function App() {
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [mistakes, setMistakes] = useState<Mistake[]>([]);
 
+  // ---- M2 state ----
+  const [knowledgeTree, setKnowledgeTree] = useState<KnowledgeNode[]>([]);
+  const [treeMaterialId, setTreeMaterialId] = useState<string>("");
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [selectedNodeTitle, setSelectedNodeTitle] = useState<string>("");
+
   const [message, setMessage] = useState("");
 
   const selectedMaterialIds = useMemo(
@@ -120,12 +146,51 @@ export default function App() {
     }
     try {
       const data = await fetchJson<Material[]>(
-        `${apiBase}/materials?notebook_id=${encodeURIComponent(notebookId)}`,
+        `${apiBase}/materials/?notebook_id=${encodeURIComponent(notebookId)}`,
       );
       setMaterials(data);
+      // 默认用于知识树的 material：优先主教材，否则第一个
+      if (!treeMaterialId) {
+        const primary = data.find((m) => m.is_primary);
+        setTreeMaterialId(primary?.id || data[0]?.id || "");
+      }
       setMessage("材料列表已更新");
     } catch (err) {
       setMessage(`读取材料失败：${(err as Error).message}`);
+    }
+  };
+
+  const normalizeMastery = (raw?: number) => {
+    if (typeof raw !== "number" || Number.isNaN(raw)) return 0;
+    // Accept either [0,1] or [0,100]
+    if (raw > 1) return Math.max(0, Math.min(1, raw / 100));
+    return Math.max(0, Math.min(1, raw));
+  };
+
+  const masteryLabel = (node: KnowledgeNode) => {
+    const s = normalizeMastery(
+      node.mastery_score ?? node.mastery ?? (typeof node.mastery_percent === "number" ? node.mastery_percent : undefined),
+    );
+    if (s >= 0.7) return { text: `${(s * 100).toFixed(0)}%`, cls: "mastery mastery--good" };
+    if (s >= 0.4) return { text: `${(s * 100).toFixed(0)}%`, cls: "mastery mastery--mid" };
+    return { text: `${(s * 100).toFixed(0)}%`, cls: "mastery mastery--low" };
+  };
+
+  const loadKnowledgeTree = async (materialId?: string) => {
+    const mid = (materialId ?? treeMaterialId).trim();
+    if (!mid) {
+      setKnowledgeTree([]);
+      return;
+    }
+    try {
+      const url = new URL(`${apiBase}/knowledge/tree`);
+      url.searchParams.set("material_id", mid);
+      if (studentId.trim()) url.searchParams.set("student_id", studentId.trim());
+      if (notebookId.trim()) url.searchParams.set("notebook_id", notebookId.trim());
+      const data = await fetchJson<KnowledgeTreeResponse>(url.toString());
+      setKnowledgeTree(data.tree || []);
+    } catch (err) {
+      setMessage(`读取知识树失败：${(err as Error).message}`);
     }
   };
 
@@ -161,8 +226,13 @@ export default function App() {
   };
 
   const generateQuiz = async () => {
-    if (selectedMaterialIds.length === 0) {
-      setMessage("请至少选择一个材料");
+    const scopedByNode = !!selectedNodeId;
+    const materialIdsForQuiz = scopedByNode
+      ? (treeMaterialId ? [treeMaterialId] : [])
+      : selectedMaterialIds;
+
+    if (materialIdsForQuiz.length === 0) {
+      setMessage(scopedByNode ? "请先在 M2 选择用于知识树的 material" : "请至少选择一个材料");
       return;
     }
     if (numQuestions < 1 || numQuestions > 5) {
@@ -177,10 +247,15 @@ export default function App() {
       setQuizStatus("出题中...");
       const payload = {
         notebook_id: notebookId,
-        material_ids: selectedMaterialIds,
+        // 规则：
+        // - 若在 M2 选择了章节/知识点，则以该知识树所属 material 作为出题语料，并传递 node_id 做范围约束。
+        // - 若未选择章节，则使用【材料列表】中勾选的 materials 进行全局出题。
+        material_ids: materialIdsForQuiz,
         num_questions: numQuestions,
         difficulty,
         question_types: questionTypes,
+        // ---- M2: 按章节/知识点出题（可选）----
+        node_id: selectedNodeId || undefined,
       };
       const data = await fetchJson<{ id: string; status: string }>(
         `${apiBase}/quizzes/generate`,
@@ -200,12 +275,18 @@ export default function App() {
   };
 
   const pollQuiz = async (id: string) => {
-    for (let i = 0; i < 10; i += 1) {
+    // Quiz generation can take longer (LLM call). Poll a bit longer and surface
+    // failures to the user.
+    for (let i = 0; i < 40; i += 1) {
       try {
         const data = await fetchJson<{ quiz: Quiz; questions: Question[] }>(`${apiBase}/quizzes/${id}`);
         setQuestions(data.questions || []);
         setQuizStatus(data.quiz.status || "ready");
         setAnswers({});
+        if (data.quiz.status === "failed") {
+          setMessage(`出题失败：${data.quiz.error_message || "unknown error"}`);
+          return;
+        }
         if (data.quiz.status === "ready") {
           return;
         }
@@ -215,6 +296,7 @@ export default function App() {
       }
       await sleep(1500);
     }
+    setMessage("出题仍在进行中，请稍后再刷新（或检查 worker 日志/LLM KEY 配置）");
   };
 
   const submitAttempt = async () => {
@@ -226,6 +308,10 @@ export default function App() {
     try {
       const payload = {
         student_id: studentId,
+        notebook_id: notebookId,
+        // 让后端能明确把作答回流到对应的知识树范围（若后端支持这些字段则会使用；不支持也不会破坏）
+        material_id: treeMaterialId || undefined,
+        node_id: selectedNodeId || undefined,
         answers,
       };
       const data = await fetchJson<{ id: string; status: string }>(
@@ -250,6 +336,8 @@ export default function App() {
         setAttempt(data);
         if (data.status === "done") {
           await loadMistakes();
+          // ---- M2: 判卷完成后刷新知识树（mastery 回流可见）----
+          await loadKnowledgeTree();
           return;
         }
       } catch (err) {
@@ -271,6 +359,36 @@ export default function App() {
     }
   };
 
+  const renderTree = (nodes: KnowledgeNode[], depth = 0) => {
+    if (!nodes || nodes.length === 0) return null;
+    return (
+      <ul className="tree">
+        {nodes.map((n) => {
+          const label = masteryLabel(n);
+          const active = selectedNodeId === n.id;
+          return (
+            <li key={n.id} className="tree__item">
+              <button
+                type="button"
+                className={active ? "tree__node tree__node--active" : "tree__node"}
+                style={{ paddingLeft: 12 + depth * 16 }}
+                onClick={() => {
+                  setSelectedNodeId(n.id);
+                  setSelectedNodeTitle(n.title);
+                }}
+                title="点击后生成测验将只围绕该章节"
+              >
+                <span className="tree__title">{n.title}</span>
+                <span className={label.cls}>{label.text}</span>
+              </button>
+              {n.children && n.children.length > 0 && renderTree(n.children, depth + 1)}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  };
+
   const toggleType = (value: string) => {
     setQuestionTypes((prev) =>
       prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
@@ -281,10 +399,10 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <div className="hero__content">
-          <p className="eyebrow">云原生 · 评测闭环 · M1 Demo</p>
+          <p className="eyebrow">云原生 · 评测闭环 · M2 Demo</p>
           <h1>学习效果评估与巩固智能体</h1>
           <p className="hero__subtitle">
-            从资料导入到出题判卷，再到错题沉淀与薄弱点诊断，一条链路清晰可见。
+            从资料导入到出题判卷，再到错题沉淀与掌握度回流（知识树），形成可视化学习闭环。
           </p>
         </div>
         <div className="hero__panel">
@@ -303,6 +421,9 @@ export default function App() {
           <div className="panel-actions">
             <button className="ghost" onClick={loadMaterials}>
               拉取材料
+            </button>
+            <button className="ghost" onClick={() => loadKnowledgeTree()}>
+              刷新知识树
             </button>
             <button className="ghost" onClick={loadMistakes}>
               刷新错题
@@ -362,7 +483,11 @@ export default function App() {
 
         <section className="card" style={cardStyle(1)}>
           <h2>2. 材料列表</h2>
-          <p className="muted">选择需要参与出题的材料。</p>
+          <p className="muted">
+            用于<span className="chip chip--primary">全局出题</span>的材料范围。
+            <br />
+            若你在 <strong>3. M2</strong> 选择了章节/知识点，则出题会<strong>以知识树所属 material</strong>为准（并按章节约束），此处勾选将被忽略。
+          </p>
           <div className="list">
             {materials.length === 0 && <p className="muted">暂无材料</p>}
             {materials.map((item) => (
@@ -392,8 +517,76 @@ export default function App() {
         </section>
 
         <section className="card" style={cardStyle(2)}>
-          <h2>3. 出题设置</h2>
-          <p className="muted">最多 5 题，支持多题型混合。</p>
+          <h2>3. 知识体系与掌握度（M2）</h2>
+          <p className="muted">
+            选择一个 material 查看章节树；点击章节后，生成测验将<strong>只围绕该章节（及其子节点）</strong>出题。
+            （这是“范围选择”的唯一入口。）
+          </p>
+          <div className="form">
+            <div className="row">
+              <label>
+                用于知识树的 material
+                <select
+                  value={treeMaterialId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setTreeMaterialId(v);
+                    // 切换 material 时清空章节选择，避免误用旧 node
+                    setSelectedNodeId("");
+                    setSelectedNodeTitle("");
+                    void loadKnowledgeTree(v);
+                  }}
+                >
+                  <option value="">-- 请选择 --</option>
+                  {materials.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}{m.is_primary ? "（主）" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" className="ghost" onClick={() => loadKnowledgeTree()}>
+                加载/刷新
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setSelectedNodeId("");
+                  setSelectedNodeTitle("");
+                }}
+                title="清除章节选择后，将进行全局出题"
+              >
+                清除章节选择
+              </button>
+            </div>
+            <div className="muted">
+              当前章节：<strong>{selectedNodeTitle || "（未选择，默认全局出题）"}</strong>
+            </div>
+            <div className="tree-wrap">
+              {knowledgeTree.length === 0 ? (
+                <p className="muted">暂无知识树，请先上传并解析材料，然后点击“加载/刷新”。</p>
+              ) : (
+                renderTree(knowledgeTree)
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="card" style={cardStyle(3)}>
+          <h2>4. 出题设置</h2>
+          <p className="muted">
+            最多 5 题，支持多题型混合。
+            {selectedNodeId ? (
+              <>
+                <br />当前已按 M2 章节范围出题：<strong>{selectedNodeTitle}</strong>
+              </>
+            ) : (
+              <>
+                <br />当前为全局出题：使用第 2 步勾选的材料。
+              </>
+            )}
+          </p>
           <div className="form">
             <div className="row">
               <label>
@@ -432,8 +625,8 @@ export default function App() {
           </div>
         </section>
 
-        <section className="card" style={cardStyle(3)}>
-          <h2>4. 作答与判卷</h2>
+        <section className="card" style={cardStyle(4)}>
+          <h2>5. 作答与判卷</h2>
           <p className="muted">测验编号：{quizId || "--"}</p>
           {questions.length === 0 ? (
             <p className="muted">请先生成测验。</p>
@@ -514,8 +707,8 @@ export default function App() {
           )}
         </section>
 
-        <section className="card" style={cardStyle(4)}>
-          <h2>5. 错题与薄弱点</h2>
+        <section className="card" style={cardStyle(5)}>
+          <h2>6. 错题与薄弱点</h2>
           <p className="muted">按 notebook 聚合的错题记录。</p>
           {mistakes.length === 0 ? (
             <p className="muted">暂无错题。</p>

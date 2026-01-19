@@ -34,6 +34,10 @@ def _mistakes_col(db):
     return db["mistakes"]
 
 
+def _mastery_col(db):
+    return db["mastery"]
+
+
 def _call_kimi(prompt: str) -> str:
     if not KIMI_API_KEY:
         raise RuntimeError("MOONSHOT_API_KEY is required for grading")
@@ -91,6 +95,7 @@ def _grade_mcq(question: Dict[str, Any], answer: Any) -> Dict[str, Any]:
     correct = str(question.get("answer_key", "")).strip()
     given = str(answer or "").strip()
     is_correct = given.lower() == correct.lower()
+    # 注意：M3 才需要 TutorCheck 防泄露；M2 这里保持 M1 行为
     feedback = "答案正确。" if is_correct else f"答案错误。正确答案为 {correct}。"
     return {
         "score": 1.0 if is_correct else 0.0,
@@ -144,6 +149,28 @@ def _update_mistakes(
     )
 
 
+def _update_mastery(db, student_id: str, notebook_id: str, node_ids: List[str], is_correct: bool):
+    # IMPORTANT (M2): update only the nodes this question is tagged with.
+    # Children mastery must be independent; parent mastery is computed as an aggregate
+    # over children in the knowledge-tree endpoint.
+    if not node_ids:
+        return
+    now = datetime.utcnow()
+    for node_id in node_ids:
+        q = {"student_id": student_id, "node_id": node_id, "notebook_id": notebook_id}
+        inc = {"seen": 1, "correct": 1 if is_correct else 0, "wrong": 0 if is_correct else 1}
+        _mastery_col(db).update_one(
+            q,
+            {"$inc": inc, "$set": {"updated_at": now}, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+        doc = _mastery_col(db).find_one(q, {"seen": 1, "correct": 1})
+        seen = int((doc or {}).get("seen", 0) or 0)
+        correct = int((doc or {}).get("correct", 0) or 0)
+        score = (correct / seen) if seen > 0 else 0.0
+        _mastery_col(db).update_one(q, {"$set": {"mastery_score": float(score)}})
+
+
 def grade_attempt(attempt_id: str):
     db = _get_db()
     attempt = _attempts_col(db).find_one({"_id": ObjectId(attempt_id)})
@@ -170,7 +197,10 @@ def grade_attempt(attempt_id: str):
         for q in questions:
             qid = str(q["_id"])
             answer = answers.get(qid)
+
             knowledge_points = q.get("knowledge_points", [])
+            node_ids = q.get("node_ids", [])  # M2：绑定的章节/知识点
+
             if q.get("type") == "short":
                 result = _grade_short_answer(q, answer)
             elif q.get("type") == "blank":
@@ -182,6 +212,7 @@ def grade_attempt(attempt_id: str):
             is_correct = bool(result.get("is_correct", False))
             mistake_added = not is_correct
             total_score += score_value
+
             grading_details.append(
                 {
                     "question_id": qid,
@@ -190,6 +221,7 @@ def grade_attempt(attempt_id: str):
                     "is_correct": is_correct,
                     "mistake_added": mistake_added,
                     "knowledge_points": knowledge_points,
+                    "node_ids": node_ids,
                     "analysis": q.get("analysis"),
                 }
             )
@@ -204,6 +236,15 @@ def grade_attempt(attempt_id: str):
                     result.get("error_analysis", ""),
                     knowledge_points,
                 )
+
+            # ---------------- M2 新增：回写 mastery ----------------
+            _update_mastery(
+                db,
+                student_id=attempt.get("student_id", "demo_user"),
+                notebook_id=quiz.get("notebook_id"),
+                node_ids=node_ids,
+                is_correct=is_correct,
+            )
 
         _attempts_col(db).update_one(
             {"_id": ObjectId(attempt_id)},

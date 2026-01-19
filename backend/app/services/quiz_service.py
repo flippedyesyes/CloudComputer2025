@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
-
 from app.db.mongo import get_db
 
 
@@ -30,6 +29,9 @@ def create_quiz(payload: Dict[str, Any]) -> Dict[str, Any]:
         "num_questions": payload.get("num_questions", 5),
         "type_mix": payload.get("type_mix"),
         "difficulty_mix": payload.get("difficulty_mix"),
+        # === M2：按知识点/章节范围出题（可选）===
+        # 统一字段名：node_id
+        "node_id": payload.get("node_id"),
         "created_at": now,
     }
     result = _quizzes_col().insert_one(doc)

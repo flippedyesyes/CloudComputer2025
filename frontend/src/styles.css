@@ -218,6 +218,94 @@ button.ghost {
   font-size: 0.9rem;
 }
 
+/* ---------------- M2: Knowledge tree ---------------- */
+.tree-wrap {
+  border: 1px solid #e3d7c3;
+  border-radius: 14px;
+  padding: 12px;
+  background: #fffdf8;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.tree {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.tree__item {
+  display: grid;
+  gap: 8px;
+}
+
+.tree__node {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fff8ee;
+  border: 1px solid #e6dac7;
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.tree__node:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.tree__node.active {
+  border-color: var(--accent);
+  background: rgba(239, 107, 76, 0.08);
+}
+
+.tree__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  text-align: left;
+}
+
+.tree__level {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mastery {
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.mastery--good {
+  background: rgba(62, 140, 134, 0.12);
+  border-color: rgba(62, 140, 134, 0.35);
+  color: var(--accent-2);
+}
+
+.mastery--mid {
+  background: rgba(242, 180, 90, 0.15);
+  border-color: rgba(242, 180, 90, 0.4);
+  color: #9a5b00;
+}
+
+.mastery--low {
+  background: rgba(239, 107, 76, 0.12);
+  border-color: rgba(239, 107, 76, 0.4);
+  color: var(--accent);
+}
+
 .list {
   display: grid;
   gap: 12px;
