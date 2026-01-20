@@ -22,6 +22,7 @@ def _serialize(doc: Dict[str, Any]) -> Dict[str, Any]:
 def create_quiz(payload: Dict[str, Any]) -> Dict[str, Any]:
     now = datetime.utcnow()
     doc = {
+        "student_id": payload.get("student_id", "demo_user"),
         "notebook_id": payload["notebook_id"],
         "material_ids": payload["material_ids"],
         "status": "generating",

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class KnowledgeNode(BaseModel):
     id: Optional[str] = None
+    student_id: Optional[str] = None
     material_id: str
     notebook_id: Optional[str] = None
     parent_id: Optional[str] = None

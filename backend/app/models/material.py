@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class Material(BaseModel):
     id: Optional[str] = None
+    student_id: str
     notebook_id: str
     title: str
     source_type: str  # text/pdf/docx/audio

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class Quiz(BaseModel):
     id: Optional[str] = None
+    student_id: str
     notebook_id: str
     material_ids: List[str] = Field(default_factory=list)
     # M2：按知识点/章节范围出题（可选）

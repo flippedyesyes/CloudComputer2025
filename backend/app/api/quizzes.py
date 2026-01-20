@@ -5,12 +5,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.jobs.queue import queue
+from app.services.material_service import get_material
 from app.services.quiz_service import create_quiz, get_quiz, list_questions
 
 router = APIRouter()
 
 
 class QuizGenerateRequest(BaseModel):
+    student_id: str = "demo_user"
     notebook_id: str
     material_ids: List[str]
     num_questions: int = 5
@@ -36,6 +38,23 @@ def generate_quiz(payload: QuizGenerateRequest):
         raise HTTPException(status_code=400, detail="material_ids is required")
     if payload.num_questions < 1 or payload.num_questions > 5:
         raise HTTPException(status_code=400, detail="num_questions must be between 1 and 5")
+    if not payload.student_id:
+        raise HTTPException(status_code=400, detail="student_id is required")
+
+    for material_id in payload.material_ids:
+        try:
+            material = get_material(material_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail=f"invalid material_id: {material_id}")
+        if not material:
+            raise HTTPException(status_code=400, detail=f"material not found: {material_id}")
+        if material.get("notebook_id") != payload.notebook_id:
+            raise HTTPException(status_code=400, detail=f"material {material_id} not in this notebook")
+        material_student = material.get("student_id")
+        if material_student and material_student != payload.student_id:
+            raise HTTPException(status_code=403, detail="material does not belong to this student")
+        if not material_student and payload.student_id != "demo_user":
+            raise HTTPException(status_code=403, detail="material belongs to default user")
 
     type_mix = payload.type_mix or _build_type_mix(payload.question_types)
     difficulty_mix = payload.difficulty_mix or _build_difficulty_mix(payload.difficulty)

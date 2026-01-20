@@ -59,6 +59,10 @@ class QuizCheck(BaseChecker):
                 if not isinstance(rubric, str) or not rubric.strip():
                     return CheckResult(status=CheckStatus.RETRY, reason=f"question[{i}] short missing rubric")
 
+            node_titles = q.get("node_titles")
+            if node_titles is not None and not isinstance(node_titles, list):
+                return CheckResult(status=CheckStatus.RETRY, reason=f"question[{i}] node_titles must be an array")
+
             # normalize strings
             q["stem"] = stem.strip()
             if isinstance(answer_key, str):

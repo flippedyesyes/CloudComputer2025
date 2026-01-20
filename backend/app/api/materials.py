@@ -13,9 +13,11 @@ from app.services.material_service import create_material, get_material, list_ma
 
 router = APIRouter()
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "storage/uploads"))
+INGEST_JOB_TIMEOUT = int(os.getenv("INGEST_JOB_TIMEOUT", "1200"))
 
 
 class MaterialCreateRequest(BaseModel):
+    student_id: str = "demo_user"
     notebook_id: str
     title: str
     source_type: str = "text"
@@ -46,7 +48,7 @@ def upload_material(payload: MaterialCreateRequest):
         return result
 
     update_material_status(result["id"], "queued")
-    job = queue.enqueue("tasks.ingest.ingest_material", result["id"])
+    job = queue.enqueue("tasks.ingest.ingest_material", result["id"], job_timeout=INGEST_JOB_TIMEOUT)
     result["status"] = "queued"
     result["job_id"] = job.id
     return result
@@ -54,6 +56,7 @@ def upload_material(payload: MaterialCreateRequest):
 
 @router.post("/upload", response_model=MaterialCreateResponse)
 def upload_material_file(
+    student_id: str = Form("demo_user"),
     notebook_id: str = Form(...),
     title: Optional[str] = Form(None),
     source_type: Optional[str] = Form(None),
@@ -69,6 +72,7 @@ def upload_material_file(
     material_title = title or Path(file.filename).stem
 
     payload = {
+        "student_id": student_id,
         "notebook_id": notebook_id,
         "title": material_title,
         "source_type": resolved_source,
@@ -83,7 +87,7 @@ def upload_material_file(
 
     result = create_material(payload)
     update_material_status(result["id"], "queued")
-    job = queue.enqueue("tasks.ingest.ingest_material", result["id"])
+    job = queue.enqueue("tasks.ingest.ingest_material", result["id"], job_timeout=INGEST_JOB_TIMEOUT)
     result["status"] = "queued"
     result["job_id"] = job.id
     return result
@@ -101,8 +105,8 @@ def get_material_detail(material_id: str):
 
 
 @router.get("/")
-def list_materials_by_notebook(notebook_id: str):
-    return list_materials(notebook_id)
+def list_materials_by_notebook(notebook_id: str, student_id: str = "demo_user"):
+    return list_materials(notebook_id, student_id=student_id)
 
 
 def _resolve_source_type(filename: str, override: Optional[str]) -> str:

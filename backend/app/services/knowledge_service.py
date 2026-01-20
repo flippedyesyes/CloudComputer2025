@@ -15,11 +15,25 @@ def _mastery_col(db):
     return db["mastery"]
 
 
-def list_nodes(material_id: str, notebook_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def _apply_student_filter(query: Dict[str, Any], student_id: Optional[str]) -> None:
+    if not student_id:
+        return
+    if student_id == "demo_user":
+        query["$or"] = [{"student_id": student_id}, {"student_id": {"$exists": False}}]
+    else:
+        query["student_id"] = student_id
+
+
+def list_nodes(
+    material_id: str,
+    notebook_id: Optional[str] = None,
+    student_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     db = get_db()
     query: Dict[str, Any] = {"material_id": material_id}
     if notebook_id:
         query["notebook_id"] = notebook_id
+    _apply_student_filter(query, student_id)
     nodes = list(_knowledge_nodes_col(db).find(query).sort([("level", 1), ("order", 1)]))
     for n in nodes:
         n["id"] = str(n["_id"])
@@ -63,7 +77,7 @@ def build_tree(
     student_id: Optional[str] = None,
     notebook_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    nodes = list_nodes(material_id, notebook_id=notebook_id)
+    nodes = list_nodes(material_id, notebook_id=notebook_id, student_id=student_id)
     id_list = [n["id"] for n in nodes]
     mastery_stats = get_mastery_stats_map(student_id or "", notebook_id, id_list) if student_id else {}
 

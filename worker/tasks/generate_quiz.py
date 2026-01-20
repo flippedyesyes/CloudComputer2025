@@ -1,11 +1,14 @@
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from openai import OpenAI
 from pymongo import MongoClient
+
+from tasks.rag import retrieve_context
 
 from checkers.gate import run_with_checker
 from checkers.quiz_check import QuizCheck
@@ -39,7 +42,16 @@ def _knowledge_nodes_col(db):
     return db["knowledge_nodes"]
 
 
-def _get_descendants(db, root_node_id: str) -> List[Dict[str, Any]]:
+def _apply_student_filter(query: Dict[str, Any], student_id: Optional[str]) -> None:
+    if not student_id:
+        return
+    if student_id == "demo_user":
+        query["$or"] = [{"student_id": student_id}, {"student_id": {"$exists": False}}]
+    else:
+        query["student_id"] = student_id
+
+
+def _get_descendants(db, root_node_id: str, student_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return all descendant nodes including the root.
 
     Used for M2 mastery: each question should be tagged to a specific (sub)knowledge node
@@ -54,7 +66,9 @@ def _get_descendants(db, root_node_id: str) -> List[Dict[str, Any]]:
     seen.add(root_node_id)
     while queue:
         cur = queue.pop(0)
-        node = _knowledge_nodes_col(db).find_one({"_id": ObjectId(cur)})
+        query: Dict[str, Any] = {"_id": ObjectId(cur)}
+        _apply_student_filter(query, student_id)
+        node = _knowledge_nodes_col(db).find_one(query)
         if node:
             out.append(
                 {
@@ -63,7 +77,9 @@ def _get_descendants(db, root_node_id: str) -> List[Dict[str, Any]]:
                     "parent_id": node.get("parent_id"),
                 }
             )
-        for row in _knowledge_nodes_col(db).find({"parent_id": cur}, {"_id": 1}):
+        child_query: Dict[str, Any] = {"parent_id": cur}
+        _apply_student_filter(child_query, student_id)
+        for row in _knowledge_nodes_col(db).find(child_query, {"_id": 1}):
             cid = str(row.get("_id"))
             if cid and cid not in seen:
                 seen.add(cid)
@@ -86,6 +102,64 @@ def _leaf_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return leaves or nodes
 
 
+def _materials_col(db):
+    return db["materials"]
+
+
+def _normalize_title_key(title: str) -> str:
+    cleaned = str(title or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"[（(].*$", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned)
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", "", cleaned)
+    return cleaned.lower()
+
+
+def _load_leaf_candidates_for_materials(
+    db,
+    material_ids: List[str],
+    student_id: Optional[str],
+    notebook_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    if not material_ids:
+        return []
+    query: Dict[str, Any] = {"material_id": {"$in": material_ids}}
+    if notebook_id:
+        query["notebook_id"] = notebook_id
+    _apply_student_filter(query, student_id)
+    nodes: List[Dict[str, Any]] = []
+    for row in _knowledge_nodes_col(db).find(query, {"_id": 1, "title": 1, "parent_id": 1}):
+        nodes.append(
+            {
+                "id": str(row.get("_id")),
+                "title": row.get("title"),
+                "parent_id": row.get("parent_id"),
+            }
+        )
+    return _leaf_nodes(nodes)
+
+
+def _load_material_titles(
+    db,
+    material_ids: List[str],
+    student_id: Optional[str],
+    notebook_id: Optional[str],
+) -> List[str]:
+    if not material_ids:
+        return []
+    query: Dict[str, Any] = {"_id": {"$in": [ObjectId(mid) for mid in material_ids if ObjectId.is_valid(mid)]}}
+    if notebook_id:
+        query["notebook_id"] = notebook_id
+    _apply_student_filter(query, student_id)
+    titles: List[str] = []
+    for doc in _materials_col(db).find(query, {"title": 1}):
+        title = str(doc.get("title") or "").strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
 # =========================
 # Context loading (M1)
 # =========================
@@ -94,15 +168,16 @@ def _load_material_texts(
     db,
     material_ids: List[str],
     max_chars: int,
+    student_id: Optional[str] = None,
 ) -> str:
     """
     M2 仍然使用 M1 的全文 / summary 作为 context，
     章节限制通过 prompt 约束（而不是切 chunk）
     """
-    summary = _load_material_texts_by_kind(db, material_ids, "summary", max_chars)
+    summary = _load_material_texts_by_kind(db, material_ids, "summary", max_chars, student_id)
     if summary:
         return summary
-    return _load_material_texts_by_kind(db, material_ids, "full", max_chars)
+    return _load_material_texts_by_kind(db, material_ids, "full", max_chars, student_id)
 
 
 def _load_material_texts_for_chunk_indexes(
@@ -110,17 +185,20 @@ def _load_material_texts_for_chunk_indexes(
     material_id: str,
     chunk_indexes: List[int],
     max_chars: int,
+    student_id: Optional[str] = None,
 ) -> str:
     """Load only specific chunks (used for M2 node-scoped quiz generation)."""
     if not chunk_indexes:
         return ""
     collected: List[str] = []
     total = 0
-    cursor = (
-        _material_texts_col(db)
-        .find({"material_id": material_id, "kind": "full", "chunk_index": {"$in": chunk_indexes}})
-        .sort("chunk_index", 1)
-    )
+    query: Dict[str, Any] = {
+        "material_id": material_id,
+        "kind": "full",
+        "chunk_index": {"$in": chunk_indexes},
+    }
+    _apply_student_filter(query, student_id)
+    cursor = _material_texts_col(db).find(query).sort("chunk_index", 1)
     for doc in cursor:
         chunk = doc.get("text", "")
         if not chunk:
@@ -133,11 +211,13 @@ def _load_material_texts_for_chunk_indexes(
             break
     # fallback to summary if full chunks missing
     if not collected:
-        cursor = (
-            _material_texts_col(db)
-            .find({"material_id": material_id, "kind": "summary", "chunk_index": {"$in": chunk_indexes}})
-            .sort("chunk_index", 1)
-        )
+        summary_query: Dict[str, Any] = {
+            "material_id": material_id,
+            "kind": "summary",
+            "chunk_index": {"$in": chunk_indexes},
+        }
+        _apply_student_filter(summary_query, student_id)
+        cursor = _material_texts_col(db).find(summary_query).sort("chunk_index", 1)
         for doc in cursor:
             chunk = doc.get("text", "")
             if not chunk:
@@ -152,16 +232,14 @@ def _load_material_texts_for_chunk_indexes(
 
 
 def _load_material_texts_by_kind(
-    db, material_ids: List[str], kind: str, max_chars: int
+    db, material_ids: List[str], kind: str, max_chars: int, student_id: Optional[str] = None
 ) -> str:
     collected: List[str] = []
     total = 0
     for material_id in material_ids:
-        cursor = (
-            _material_texts_col(db)
-            .find({"material_id": material_id, "kind": kind})
-            .sort("chunk_index", 1)
-        )
+        query: Dict[str, Any] = {"material_id": material_id, "kind": kind}
+        _apply_student_filter(query, student_id)
+        cursor = _material_texts_col(db).find(query).sort("chunk_index", 1)
         for doc in cursor:
             chunk = doc.get("text", "")
             if not chunk:
@@ -243,6 +321,9 @@ def generate_quiz(quiz_id: str):
         print(f"[generate_quiz] quiz not found: {quiz_id}")
         return
 
+    student_id = quiz.get("student_id")
+    notebook_id = quiz.get("notebook_id")
+
     _quizzes_col(db).update_one(
         {"_id": ObjectId(quiz_id)}, {"$set": {"status": "processing"}}
     )
@@ -262,7 +343,9 @@ def generate_quiz(quiz_id: str):
     node_chunk_indexes: List[int] = []
     node_material_id: Optional[str] = None
     if node_id:
-        node = _knowledge_nodes_col(db).find_one({"_id": ObjectId(node_id)})
+        node_query: Dict[str, Any] = {"_id": ObjectId(node_id)}
+        _apply_student_filter(node_query, student_id)
+        node = _knowledge_nodes_col(db).find_one(node_query)
         if node:
             node_title = node.get("title")
             node_material_id = node.get("material_id")
@@ -273,27 +356,70 @@ def generate_quiz(quiz_id: str):
     # Build candidate leaf nodes under the selected node for per-child mastery.
     leaf_candidates: List[Dict[str, Any]] = []
     leaf_title_to_id: Dict[str, str] = {}
+    leaf_id_to_title: Dict[str, str] = {}
     if node_id:
-        descendants = _get_descendants(db, node_id)
+        descendants = _get_descendants(db, node_id, student_id)
         leaf_candidates = _leaf_nodes(descendants)
         # Map by normalized title (strip spaces)
-        for n in leaf_candidates:
-            t = (n.get("title") or "").strip()
-            if t:
-                leaf_title_to_id[t] = n.get("id")
+        if not leaf_candidates:
+            leaf_candidates = _load_leaf_candidates_for_materials(
+                db, material_ids, student_id, notebook_id
+            )
+    else:
+        leaf_candidates = _load_leaf_candidates_for_materials(
+            db, material_ids, student_id, notebook_id
+        )
+
+    for n in leaf_candidates:
+        t = (n.get("title") or "").strip()
+        nid = n.get("id")
+        key = _normalize_title_key(t)
+        if t and nid and key and key not in leaf_title_to_id:
+            leaf_title_to_id[key] = nid
+            leaf_id_to_title[nid] = t
 
     try:
         # 优先按 node 的 chunk_indexes 取 context；没有就退回 M1 的全文/summary
         context = ""
-        if node_id and node_chunk_indexes and node_material_id:
+        if node_id:
+            query = node_title or ""
+            if query:
+                try:
+                    context = retrieve_context(
+                        db,
+                        material_ids,
+                        query,
+                        student_id=student_id,
+                        notebook_id=notebook_id,
+                        max_chars=CONTEXT_MAX_CHARS,
+                    )
+                except Exception:
+                    context = ""
+        else:
+            titles = _load_material_titles(db, material_ids, student_id, notebook_id)
+            query = " ".join(titles).strip()
+            if query:
+                try:
+                    context = retrieve_context(
+                        db,
+                        material_ids,
+                        query,
+                        student_id=student_id,
+                        notebook_id=notebook_id,
+                        max_chars=CONTEXT_MAX_CHARS,
+                    )
+                except Exception:
+                    context = ""
+        if not context and node_id and node_chunk_indexes and node_material_id:
             context = _load_material_texts_for_chunk_indexes(
                 db,
                 material_id=str(node_material_id),
                 chunk_indexes=node_chunk_indexes,
                 max_chars=CONTEXT_MAX_CHARS,
+                student_id=student_id,
             )
         if not context:
-            context = _load_material_texts(db, material_ids, CONTEXT_MAX_CHARS)
+            context = _load_material_texts(db, material_ids, CONTEXT_MAX_CHARS, student_id)
         if not context:
             raise RuntimeError("no material text available")
 
@@ -317,10 +443,11 @@ def generate_quiz(quiz_id: str):
             "- answer_key: correct option letter or reference answer\n"
             "- rubric: scoring rubric (short only)\n"
             "- difficulty: L1/L2/L3\n"
-            "- knowledge_points: array of strings (key concepts)\n"
+            "- knowledge_points: array of strings (key concepts, must align with node_titles if provided)\n"
             "- analysis: short explanation for the answer\n"
-            "- node_title: one title picked EXACTLY from the provided node title list (if provided)\n"
+            "- node_titles: array of 1-3 titles picked EXACTLY from the provided node title list (if provided)\n"
             "For blank questions, use stem with a blank like '____' and provide the exact answer_key.\n"
+            "If you include formulas, wrap them with $...$.\n"
             "Material:\n"
             f"{context}\n"
         )
@@ -330,7 +457,7 @@ def generate_quiz(quiz_id: str):
             # Keep list short to reduce prompt size
             titles = titles[:30]
             prompt += (
-                "\nNode title list (choose the best matching one for each question and output it as node_title):\n"
+                "\nNode title list (choose 1-3 per question and output as node_titles):\n"
                 + "\n".join([f"- {t}" for t in titles])
                 + "\n"
             )
@@ -375,17 +502,38 @@ def generate_quiz(quiz_id: str):
 
             # Determine node_ids for this question
             node_ids: List[str] = []
-            node_title_out = (q.get("node_title") or "").strip()
-            if node_title_out and node_title_out in leaf_title_to_id:
-                node_ids = [leaf_title_to_id[node_title_out]]
-            elif leaf_candidates:
+            node_titles: List[str] = []
+            node_titles_raw = q.get("node_titles")
+            if isinstance(node_titles_raw, list):
+                node_titles = [str(t).strip() for t in node_titles_raw if str(t).strip()]
+            else:
+                node_title_out = (q.get("node_title") or "").strip()
+                if node_title_out:
+                    node_titles = [node_title_out]
+
+            for title in node_titles:
+                key = _normalize_title_key(title)
+                node_id = leaf_title_to_id.get(key)
+                if node_id and node_id not in node_ids:
+                    node_ids.append(node_id)
+
+            if not node_ids and leaf_candidates:
                 # fallback: assign evenly across leaf nodes
                 nid = leaf_candidates[rr % len(leaf_candidates)].get("id")
                 rr += 1
                 if nid:
                     node_ids = [nid]
-            else:
+            elif not node_ids:
                 node_ids = fallback_node_ids
+
+            if node_ids and leaf_id_to_title:
+                aligned_titles = [leaf_id_to_title.get(nid) for nid in node_ids if leaf_id_to_title.get(nid)]
+                if aligned_titles:
+                    knowledge_points = aligned_titles
+            elif node_titles:
+                knowledge_points = node_titles
+            elif node_title and node_ids:
+                knowledge_points = [node_title]
 
             doc = {
                 "quiz_id": quiz_id,

@@ -42,6 +42,15 @@ services:
       - CONTEXT_MAX_CHARS=${CONTEXT_MAX_CHARS:-10000}
       - SUMMARY_MAX_CHARS=${SUMMARY_MAX_CHARS:-10000}
       - SUMMARY_CHUNK_CHARS=${SUMMARY_CHUNK_CHARS:-4000}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - EMBED_MODEL=${EMBED_MODEL:-embedding-3}
+      - EMBED_DIM=${EMBED_DIM:-0}
+      - EMBED_MAX_CHARS=${EMBED_MAX_CHARS:-2000}
+      - RAG_ENABLED=${RAG_ENABLED:-1}
+      - RAG_TOP_K=${RAG_TOP_K:-6}
+      - RAG_CONTEXT_MAX_CHARS=${RAG_CONTEXT_MAX_CHARS:-8000}
+      - RAG_INDEX_DIR=${RAG_INDEX_DIR:-/app/storage/vector_index}
+      - ZHIPU_EMBED_URL=${ZHIPU_EMBED_URL:-https://open.bigmodel.cn/api/paas/v4/embeddings}
 
   frontend:
     build: ./frontend

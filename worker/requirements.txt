@@ -3,3 +3,6 @@ rq
 pymongo
 openai
 groq
+langchain-core
+langchain-community
+faiss-cpu

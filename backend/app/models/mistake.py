@@ -16,3 +16,9 @@ class Mistake(BaseModel):
     knowledge_points: List[str] = Field(default_factory=list)
     last_error_analysis: Optional[str] = None
     last_wrong_at: Optional[datetime] = None
+    last_question: Optional[str] = None
+    last_question_type: Optional[str] = None
+    last_options: List[str] = Field(default_factory=list)
+    last_student_answer: Optional[str] = None
+    last_correct_answer: Optional[str] = None
+    last_explanation: Optional[str] = None

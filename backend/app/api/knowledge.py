@@ -10,7 +10,7 @@ router = APIRouter()
 @router.get("/tree")
 def get_knowledge_tree(
     material_id: str = Query(...),
-    student_id: Optional[str] = Query(None),
+    student_id: str = Query("demo_user"),
     notebook_id: Optional[str] = Query(None),
 ):
     if not material_id:
