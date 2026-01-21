@@ -15,6 +15,19 @@ _LEAK_PATTERNS = [
     re.compile(r"final answer", re.IGNORECASE),
 ]
 
+def _normalize_answer(ans: str) -> str:
+    if ans is None:
+        return ""
+    s = str(ans).strip()
+    # normalize common MCQ formats: 'A', '选A', '选项A', '答案：A'
+    m = re.search(r"([A-D])", s, re.IGNORECASE)
+    if m and len(s) <= 8:
+        return m.group(1).upper()
+    # whitespace normalization for free-form answers
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 
 class TutorCheck:
     """Validate tutor output for controlled hint ladder."""
@@ -43,6 +56,16 @@ class TutorCheck:
                 if pat.search(combined_text):
                     return CheckResult(status=CheckStatus.RETRY, reason="hint_level < FINAL: do not reveal final answer", output=data)
 
+        # FINAL stage: if we have a reference correct_answer, ensure tutor's final answer is consistent
+        if is_final and context and context.get("correct_answer"):
+            ref = _normalize_answer(str(context.get("correct_answer")))
+            cand = _normalize_answer(str(data.get("final_answer") or data.get("worked_solution") or ""))
+            if ref and cand and ref != cand:
+                return CheckResult(
+                    status=CheckStatus.RETRY,
+                    reason=f"FINAL answer mismatch: expected {ref} but got {cand}",
+                    output=data,
+                )
         if not data.get("hint") and not data.get("question"):
             return CheckResult(status=CheckStatus.RETRY, reason="tutor output must include hint or question")
 

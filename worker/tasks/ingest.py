@@ -21,6 +21,16 @@ KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshot-v1-8k")
 SUMMARY_MAX_CHARS = int(os.getenv("SUMMARY_MAX_CHARS", "10000"))
 SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "4000"))
 
+
+# --- Zhipu (GLM) for prompt compression (avoid token limit in knowledge-tree generation) ---
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
+ZHIPU_CHAT_URL = os.getenv("ZHIPU_CHAT_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions")
+ZHIPU_SUMMARY_MODEL = os.getenv("ZHIPU_SUMMARY_MODEL", os.getenv("ZHIPU_MODEL", "glm-4-flash"))
+TREE_COMPRESS_ENABLED = os.getenv("TREE_COMPRESS_ENABLED", "1") == "1"
+TREE_COMPRESS_MAX_CHARS = int(os.getenv("TREE_COMPRESS_MAX_CHARS", "6000"))
+TREE_COMPRESS_CHUNK_CHARS = int(os.getenv("TREE_COMPRESS_CHUNK_CHARS", "3500"))
+TREE_COMPRESS_RETRY_MAX = int(os.getenv("TREE_COMPRESS_RETRY_MAX", "3"))
+
 # M2：知识树生成输入长度（避免超长）
 TREE_CONTEXT_MAX_CHARS = int(os.getenv("TREE_CONTEXT_MAX_CHARS", "12000"))
 TREE_CANDIDATE_MAX = int(os.getenv("TREE_CANDIDATE_MAX", "30"))
@@ -63,6 +73,107 @@ def _split_text(text: str, max_chars: int = 2000) -> List[str]:
     return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
+
+def _zhipu_post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not ZHIPU_API_KEY:
+        raise RuntimeError("ZHIPU_API_KEY is not set")
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read().decode("utf-8")
+    return json.loads(raw)
+
+
+def _zhipu_chat(messages: List[Dict[str, str]], model: Optional[str] = None, temperature: float = 0.2) -> str:
+    payload = {
+        "model": model or ZHIPU_SUMMARY_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    last_err: Optional[Exception] = None
+    for attempt in range(1, TREE_COMPRESS_RETRY_MAX + 1):
+        try:
+            resp = _zhipu_post_json(ZHIPU_CHAT_URL, payload)
+            if isinstance(resp, dict):
+                choices = resp.get("choices")
+                if isinstance(choices, list) and choices:
+                    msg = choices[0].get("message") or {}
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+                # Some Zhipu responses may use "data" field
+                data = resp.get("data")
+                if isinstance(data, dict) and isinstance(data.get("choices"), list) and data["choices"]:
+                    msg = data["choices"][0].get("message") or {}
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+            raise RuntimeError(f"Unexpected Zhipu response: {resp}")
+        except Exception as exc:
+            last_err = exc
+            time.sleep(min(1.0 * (2 ** (attempt - 1)), 6.0))
+    raise RuntimeError(f"Zhipu chat failed after retries: {last_err}")
+
+
+def _compress_tree_context(text: str) -> str:
+    """Compress long material text into a short outline for knowledge-tree prompting."""
+    if not text:
+        return ""
+    if not TREE_COMPRESS_ENABLED or not ZHIPU_API_KEY:
+        # Fallback: balanced excerpt (still capped) to avoid blowing token budget
+        return _balanced_excerpt(text, TREE_COMPRESS_MAX_CHARS)
+
+    # Map: summarize each chunk into a compact outline (chapter/section/concepts)
+    chunks = _split_text(text, max_chars=TREE_COMPRESS_CHUNK_CHARS)
+    outlines: List[str] = []
+    for idx, ch in enumerate(chunks):
+        prompt = (
+            "你是目录/知识结构压缩器。请从以下材料片段中提取可能的：章标题、小节标题、核心概念词。\n"
+            "要求：\n"
+            "1) 只输出精简的层级大纲（可用 1./1.1/• 形式），不写解释。\n"
+            "2) 不要编造；出现就写，不确定就略过。\n"
+            "3) 每行尽量短（<=20字），总行数尽量少。\n"
+            f"片段索引：{idx+1}/{len(chunks)}\n"
+            "材料片段：\n"
+            f"{ch}\n"
+        )
+        out = _zhipu_chat(
+            [
+                {"role": "system", "content": "你擅长把长文档压缩成可用于目录抽取的短大纲。"},
+                {"role": "user", "content": prompt},
+            ],
+            model=ZHIPU_SUMMARY_MODEL,
+            temperature=0.2,
+        )
+        outlines.append(out)
+
+    merged = "\n".join(outlines).strip()
+    if len(merged) <= TREE_COMPRESS_MAX_CHARS:
+        return merged
+
+    # Reduce: merge outlines into a final concise outline within max chars
+    reduce_prompt = (
+        "请把下面多个片段大纲合并去重，生成一个最终精简大纲，用于后续生成知识树。\n"
+        "要求：\n"
+        "1) 只输出大纲，不写解释。\n"
+        "2) 三层结构：章 -> 小节 -> 概念词。\n"
+        f"3) 总长度控制在 {TREE_COMPRESS_MAX_CHARS} 字以内。\n"
+        "大纲集合：\n"
+        f"{merged}\n"
+    )
+    final = _zhipu_chat(
+        [
+            {"role": "system", "content": "你擅长合并去重并压缩目录结构。"},
+            {"role": "user", "content": reduce_prompt},
+        ],
+        model=ZHIPU_SUMMARY_MODEL,
+        temperature=0.2,
+    )
+    return final[:TREE_COMPRESS_MAX_CHARS].strip()
 def _download_to_temp(url: str) -> Path:
     suffix = Path(url).suffix or ".bin"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as fp:
@@ -198,17 +309,24 @@ def _extract_heading_candidates(text: str) -> Dict[str, List[str]]:
     chapter_patterns = [
         r"^第[一二三四五六七八九十0-9]+章",
         r"^Chapter\s*\d+",
+        r"^#\s+.+$",
     ]
     section_patterns = [
         r"^第[一二三四五六七八九十0-9]+节",
         r"^\d+\.\d+\s",
         r"^\d+\.\d+\b",
         r"^[一二三四五六七八九十]+、",
+        # Roman numerals like "IV. DBSCAN"
+        r"^[IVXLCDM]+\.\s+",
+        r"^[IVXLCDM]+\.",
+        # Markdown headings
+        r"^##\s+.+$",
     ]
     point_patterns = [
         r"^\d+\.\d+\.\d+\b",
         r"^（[一二三四五六七八九十0-9]+）",
         r"^\([一二三四五六七八九十0-9]+\)",
+        r"^###\s+.+$",
     ]
 
     def _add(kind: str, line: str) -> None:
@@ -493,18 +611,28 @@ def _normalize_title_for_dedupe(title: str) -> str:
 
 
 def _is_similar_title(a: str, b: str) -> bool:
+    """Conservative title similarity to avoid accidentally merging distinct branches."""
     if not a or not b:
         return False
+    a = a.strip()
+    b = b.strip()
     if a == b:
         return True
-    if a in b or b in a:
+
+    # Normalize for comparison
+    na = re.sub(r"\s+", " ", a.lower())
+    nb = re.sub(r"\s+", " ", b.lower())
+
+    # Very close match only
+    from difflib import SequenceMatcher
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    if ratio >= 0.92:
         return True
-    set_a = set(a)
-    set_b = set(b)
-    if not set_a or not set_b:
-        return False
-    jaccard = len(set_a & set_b) / len(set_a | set_b)
-    return jaccard >= 0.85
+
+    # Allow small suffix/prefix differences only when one is short
+    if min(len(na), len(nb)) <= 6 and ratio >= 0.88:
+        return True
+    return False
 
 
 def _parse_dedupe_groups(raw: str) -> List[Dict[str, Any]]:
@@ -814,6 +942,8 @@ def _clean_redundant_lines(text: str) -> str:
             r"^Chapter\s*\d+",
             r"^\d+\.\d+(\.\d+)?\b",
             r"^[一二三四五六七八九十]+、",
+            r"^[IVXLCDM]+\.",
+            r"^#+\s+.+$",
         ]
         return any(re.match(pat, line) for pat in patterns)
 
@@ -949,6 +1079,17 @@ def _dedupe_titles(titles: List[str]) -> List[str]:
 def _limit_context(text: str, max_chars: int) -> str:
     return text.strip()[:max_chars] if text else ""
 
+def _balanced_excerpt(text: str, max_chars: int) -> str:
+    """Return a head+tail excerpt so late-section topics aren't dropped by truncation."""
+    if not text:
+        return ""
+    src = text.strip()
+    if len(src) <= max_chars:
+        return src
+    half = max_chars // 2
+    return src[:half] + "\n...\n" + src[-half:]
+
+
 
 def _parse_title_list(raw: str) -> List[str]:
     cleaned = _strip_code_fence(raw)
@@ -1041,7 +1182,7 @@ def _build_rag_context(chunks: List[str], query: str, max_chars: int) -> str:
     if not ranked:
         return ""
     ctx = "\n".join(ranked)
-    return _limit_context(ctx, max_chars)
+    return ctx  # no truncation per requirement
 
 
 def _filter_candidates_for_text(candidates: List[str], text: str, limit: int) -> List[str]:
@@ -1125,10 +1266,21 @@ def _build_knowledge_tree_staged(
     candidates: Optional[Dict[str, List[str]]] = None,
     chunks: Optional[List[str]] = None,
 ) -> List[Dict]:
-    base_text = summary_text or text
+    def _balanced_excerpt(src: str, max_chars: int) -> str:
+        if not src:
+            return ""
+        if len(src) <= max_chars:
+            return src
+        half = max_chars // 2
+        return src[:half] + "\n...\n" + src[-half:]
+
+    # NOTE: summary_text may omit late-section topics (e.g., DBSCAN). For tree completeness,
+    # use a balanced excerpt of the full text so both early and late headings can be extracted.
+    base_text = _balanced_excerpt(text, TREE_CONTEXT_MAX_CHARS * 2)
+
     rag_chunks = chunks or _split_text(text)
     chapter_candidates = (candidates or {}).get("chapters") or []
-    chapter_ctx = _limit_context(base_text, TREE_CONTEXT_MAX_CHARS)
+    chapter_ctx = base_text.strip() if base_text else ""  # no truncation per requirement
 
     prompt = (
         "从以下学习资料中提取【章级目录】。\n"
@@ -1168,7 +1320,7 @@ def _build_knowledge_tree_staged(
         if not chapter_ctx:
             if not chapter_text:
                 chapter_text = base_text
-            chapter_ctx = _limit_context(chapter_text, TREE_CONTEXT_MAX_CHARS)
+            chapter_ctx = chapter_text.strip() if chapter_text else ""  # no truncation per requirement
         if not chapter_text:
             chapter_text = base_text
         chapter_section_candidates = _filter_candidates_for_text(
@@ -1220,7 +1372,7 @@ def _build_knowledge_tree_staged(
             if not section_ctx:
                 if not section_text:
                     section_text = chapter_text
-                section_ctx = _limit_context(section_text, TREE_CONTEXT_MAX_CHARS)
+                section_ctx = section_text.strip() if section_text else ""  # no truncation per requirement
             if not section_text:
                 section_text = chapter_text
             section_point_candidates = _filter_candidates_for_text(
@@ -1282,7 +1434,9 @@ def _build_knowledge_tree(text: str, candidates: Optional[Dict[str, List[str]]] 
       {"title":"知识点A","level":3,"order":0,"parent_order":0,"parent_parent_order":0}
     ]
     """
-    ctx = _limit_context(text, TREE_CONTEXT_MAX_CHARS)
+    ctx = _compress_tree_context(text.strip() if text else "")  # compressed to avoid token limit
+    if len(ctx) > TREE_CONTEXT_MAX_CHARS:
+        ctx = _balanced_excerpt(ctx, TREE_CONTEXT_MAX_CHARS)
     candidate_block = ""
     if candidates:
         ch_titles = _dedupe_titles(candidates.get("chapters") or [])[:TREE_CANDIDATE_MAX]
@@ -1489,7 +1643,10 @@ def ingest_material(material_id: str):
         # ---------------- M2 新增：生成知识体系树并入库 ----------------
         # 输入优先用 summary（更像目录提取），没有 summary 就用原文前一段
         tree_text = _clean_redundant_lines(text)
-        tree_source = summary_text or tree_text
+        # NOTE: summary_text can miss late sections (e.g., DBSCAN). Use a head+tail excerpt of the full text.
+        base_tree_text = _balanced_excerpt(tree_text, TREE_CONTEXT_MAX_CHARS * 2)
+        compressed_tree_text = _compress_tree_context(base_tree_text)
+        tree_source = (summary_text.strip() + "\n\n" if summary_text else "") + compressed_tree_text
         tree_candidates = _extract_heading_candidates(tree_text)
         tree_chunks = _split_text(tree_text)
         if not tree_chunks:

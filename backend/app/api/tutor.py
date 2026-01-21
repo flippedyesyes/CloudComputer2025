@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from bson.errors import InvalidId
+from bson import ObjectId
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,7 @@ from app.services.tutor_service import (
     suggest_next_level,
 )
 from app.tutor_runtime.engine import run_tutor_turn
+from app.db.mongo import get_db
 
 
 router = APIRouter()
@@ -55,11 +57,21 @@ def start_tutor(payload: TutorStartRequest):
     if not (payload.student_answer or "").strip():
         raise HTTPException(status_code=400, detail="student_answer is required")
 
+    correct_answer = payload.correct_answer
+    # If correct_answer not provided, try to fetch from questions collection by question_id
+    if (not correct_answer) and payload.question_id:
+        try:
+            qdoc = get_db()["questions"].find_one({"_id": ObjectId(payload.question_id)})
+            if qdoc and qdoc.get("answer_key"):
+                correct_answer = str(qdoc.get("answer_key"))
+        except Exception:
+            # silently ignore lookup failures; tutor will operate without anchor
+            pass
     session = create_tutor_session(
         student_id=payload.student_id,
         question_id=payload.question_id,
         stem=payload.stem,
-        correct_answer=payload.correct_answer,
+        correct_answer=correct_answer,
         student_answer=payload.student_answer,
         missing_points=payload.missing_points,
         error_tags=payload.error_tags,

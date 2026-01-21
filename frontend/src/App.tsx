@@ -299,7 +299,12 @@ export default function App() {
       const primary = data.find((m) => m.is_primary);
       const treeStillValid = treeMaterialId && data.some((m) => m.id === treeMaterialId);
       if (!treeStillValid) {
-        setTreeMaterialId(primary?.id || data[0]?.id || "");
+        const chosen = primary?.id || data[0]?.id || "";
+        setTreeMaterialId(chosen);
+        // ---- M2: materials 刷新后自动拉取知识树（进入知识树页无需手动点加载）----
+        if (chosen) {
+          void loadKnowledgeTree(chosen);
+        }
       }
       setMessage("材料列表已更新");
     } catch (err) {
@@ -816,6 +821,14 @@ export default function App() {
       treeChartInstanceRef.current = null;
     };
   }, [activeView]);
+
+  // ---- M2: 进入知识树页时自动加载（以及 material/notebook/student 变更时刷新）----
+  useEffect(() => {
+    if (activeView !== "knowledge") return;
+    if (!treeMaterialId.trim()) return;
+    void loadKnowledgeTree(treeMaterialId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, treeMaterialId, notebookId, studentId]);
 
   useEffect(() => {
     if (activeView !== "knowledge") return;

@@ -72,6 +72,7 @@ def _build_prompt(session: Dict[str, Any], message: str, hint_level: str) -> str
         "=== 题目信息 ===\n"
         f"stem: {session.get('stem','')}\n"
         f"student_answer: {session.get('student_answer','')}\n"
+        f"reference_answer(仅供导师内部对齐，FINAL前禁止泄露): {session.get('correct_answer', '')}\n"
         f"diagnosis(missing_points/error_tags/weak_node_ids): {json.dumps(diagnosis, ensure_ascii=False)}\n\n"
         "=== 对话历史(最近10条) ===\n"
         f"{json.dumps(history, ensure_ascii=False)}\n\n"
@@ -96,7 +97,7 @@ def run_tutor_turn(session: Dict[str, Any], message: str, hint_level: str) -> Di
             llm_call=_call_kimi,
             prompt=prompt,
             checker=checker,
-            context={"hint_level": hint_level},
+            context={"hint_level": hint_level, "correct_answer": session.get("correct_answer")},
             max_retries=2,
         )
     except Exception as e:
