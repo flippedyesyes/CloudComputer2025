@@ -38,6 +38,9 @@ def _build_prompt(session: Dict[str, Any], message: str, hint_level: str) -> str
 
     # MongoDB documents may contain datetime/ObjectId which are not JSON serializable.
     diagnosis = make_jsonable(session.get("diagnosis") or {})
+    question_meta = make_jsonable(session.get("question") or {})
+    if hint_level.upper() != "FINAL" and isinstance(question_meta, dict):
+        question_meta.pop("reference_analysis", None)
     history = make_jsonable(session.get("history") or [])
     # Keep only last 10 messages
     history = history[-10:]
@@ -58,11 +61,17 @@ def _build_prompt(session: Dict[str, Any], message: str, hint_level: str) -> str
         "worked_solution": "string (ONLY when hint_level is FINAL; can be short)",
     }
 
+    ref_line = ""
+    if hint_level.upper() == "FINAL":
+        ref_line = f"reference_answer(仅供导师内部对齐，FINAL前禁止泄露): {session.get('correct_answer', '')}\n"
+
     return (
         "你是学生的引导式导师(Tutor)。你的任务是‘一轮只给一步’，使用提示阶梯(Hint ladder)。\n"
         "严格要求：\n"
         "- 只输出 JSON 对象，不要 markdown，不要多余解释。\n"
         "- hint_level != FINAL 时，禁止出现‘正确答案/答案是/选项X’等任何泄露最终答案的内容。\n"
+        "- 必须引用学生的作答或本轮提问中的关键词，保证回复与学生输入相关。\n"
+        "- 选择题不要使用选项字母，尽量用选项内容或概念进行引导。\n"
         "- 每轮只能给一步：1个hint + 1个question。\n"
         "\n"
         f"本轮 hint_level = {hint_level}\n"
@@ -72,7 +81,8 @@ def _build_prompt(session: Dict[str, Any], message: str, hint_level: str) -> str
         "=== 题目信息 ===\n"
         f"stem: {session.get('stem','')}\n"
         f"student_answer: {session.get('student_answer','')}\n"
-        f"reference_answer(仅供导师内部对齐，FINAL前禁止泄露): {session.get('correct_answer', '')}\n"
+        f"question_meta(type/options/knowledge_points/reference_analysis): {json.dumps(question_meta, ensure_ascii=False)}\n"
+        f"{ref_line}"
         f"diagnosis(missing_points/error_tags/weak_node_ids): {json.dumps(diagnosis, ensure_ascii=False)}\n\n"
         "=== 对话历史(最近10条) ===\n"
         f"{json.dumps(history, ensure_ascii=False)}\n\n"

@@ -18,6 +18,10 @@ def create_tutor_session(
     stem: str,
     correct_answer: Optional[str],
     student_answer: str,
+    question_type: Optional[str],
+    options: Optional[List[str]],
+    knowledge_points: List[str],
+    reference_analysis: Optional[str],
     missing_points: List[str],
     error_tags: List[str],
     weak_node_ids: List[str],
@@ -32,6 +36,12 @@ def create_tutor_session(
         "stem": stem,
         "correct_answer": correct_answer,
         "student_answer": student_answer,
+        "question": {
+            "type": question_type,
+            "options": options or [],
+            "knowledge_points": knowledge_points or [],
+            "reference_analysis": reference_analysis or "",
+        },
         "diagnosis": {
             "missing_points": missing_points or [],
             "error_tags": error_tags or [],

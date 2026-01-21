@@ -2,17 +2,17 @@
 
 :root {
   color-scheme: light;
-  --bg: #eef1f7;
-  --bg-2: #e6e9f3;
-  --surface: #f7f8fc;
-  --surface-2: #eef1f7;
-  --ink: #2a2f3d;
-  --muted: #6b6f7d;
-  --line: #d7dbe8;
-  --accent: #6b78b9;
-  --accent-2: #8a94d4;
-  --accent-3: #b8c0e8;
-  --shadow: 0 18px 40px rgba(30, 36, 55, 0.12);
+  --bg: #1b142b;
+  --bg-2: #241a38;
+  --surface: #f7f5ff;
+  --surface-2: #efedf9;
+  --ink: #2b243b;
+  --muted: #6d6a82;
+  --line: #d9d4ee;
+  --accent: #6c5dd3;
+  --accent-2: #8e7bff;
+  --accent-3: #c2b7ff;
+  --shadow: 0 20px 46px rgba(19, 12, 39, 0.28);
   --radius: 18px;
   --radius-lg: 24px;
 }
@@ -26,7 +26,11 @@ body {
   min-height: 100vh;
   font-family: "Plus Jakarta Sans", "Noto Serif SC", sans-serif;
   color: var(--ink);
-  background: linear-gradient(130deg, #f5f7ff 0%, #eef1f7 45%, #e4e8f6 100%);
+  background:
+    radial-gradient(1200px 800px at 12% 12%, rgba(111, 84, 214, 0.45), transparent 60%),
+    radial-gradient(900px 700px at 88% 18%, rgba(92, 128, 235, 0.28), transparent 58%),
+    radial-gradient(1200px 900px at 50% 100%, rgba(142, 108, 238, 0.25), transparent 62%),
+    linear-gradient(145deg, #140f24 0%, #221838 52%, #2b2044 100%);
 }
 
 body::before,
@@ -44,13 +48,13 @@ body::after {
 body::before {
   top: -180px;
   left: -160px;
-  background: radial-gradient(circle, rgba(123, 136, 199, 0.35), transparent 70%);
+  background: radial-gradient(circle, rgba(118, 96, 214, 0.45), transparent 70%);
 }
 
 body::after {
   bottom: -220px;
   right: -180px;
-  background: radial-gradient(circle, rgba(147, 165, 221, 0.3), transparent 70%);
+  background: radial-gradient(circle, rgba(86, 126, 224, 0.35), transparent 70%);
 }
 
 h1,
@@ -91,10 +95,11 @@ small {
   font-weight: 700;
   font-size: 2.0rem;
   letter-spacing: 0.02em;
+  color: #f2efff;
 }
 
 .sidebar {
-  background: rgba(247, 248, 252, 0.9);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 238, 255, 0.92) 100%);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 20px 16px 18px;
@@ -135,9 +140,13 @@ small {
   box-shadow: none;
 }
 
+.nav__item span {
+  font-size: 1.1rem;
+}
+
 .nav__item small {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
 .nav__item:hover {
@@ -157,7 +166,7 @@ small {
 }
 
 .topbar {
-  background: rgba(247, 248, 252, 0.92);
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.98) 0%, rgba(242, 239, 255, 0.92) 100%);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 14px 18px;
@@ -246,7 +255,7 @@ small {
 }
 
 .card {
-  background: var(--surface);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.97) 0%, rgba(241, 238, 255, 0.88) 100%);
   border-radius: var(--radius);
   padding: 18px;
   box-shadow: var(--shadow);
@@ -680,8 +689,10 @@ button:disabled {
 .toast {
   padding: 10px 14px;
   border-radius: 12px;
-  background: rgba(151, 165, 212, 0.2);
-  border: 1px solid rgba(151, 165, 212, 0.3);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(160, 150, 210, 0.45);
+  color: var(--ink);
+  box-shadow: 0 12px 24px rgba(14, 10, 28, 0.2);
 }
 
 .modal {

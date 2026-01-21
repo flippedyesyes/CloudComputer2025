@@ -200,7 +200,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export default function App() {
-  const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
+  const [apiBase] = useState(DEFAULT_API_BASE);
   const [notebookId, setNotebookId] = useState("demo-notebook");
   const [studentId, setStudentId] = useState("demo_user");
 
@@ -662,6 +662,8 @@ export default function App() {
     const grading = gradingMap.get(q.id);
     const missing = grading?.result?.missing_points || [];
     const tags = grading?.result?.error_tags || [];
+    const knowledgePoints = grading?.knowledge_points || [];
+    const studentAnswer = answers[q.id] || "";
 
     setTutorOpen(true);
     setTutorQuestionId(q.id);
@@ -679,7 +681,10 @@ export default function App() {
           student_id: studentId.trim(),
           question_id: q.id,
           stem: q.stem,
-          student_answer: answers[q.id] || "",
+          student_answer: studentAnswer,
+          question_type: q.type,
+          options: q.options || [],
+          knowledge_points: knowledgePoints,
           missing_points: missing,
           error_tags: tags,
           weak_node_ids: [],
@@ -694,7 +699,11 @@ export default function App() {
       const first = await fetchJson<{ assistant: any; hint_level: string; turn: number }>(`${apiBase}/tutor/next`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: start.session_id, message: "", give_up: false }),
+        body: JSON.stringify({
+          session_id: start.session_id,
+          message: studentAnswer ? `我的答案是：${studentAnswer}` : "",
+          give_up: false,
+        }),
       });
       const hint = first.assistant?.hint || first.assistant?.question || JSON.stringify(first.assistant);
       const ask = first.assistant?.question ? `\n\n👉 ${first.assistant.question}` : "";
@@ -986,10 +995,6 @@ export default function App() {
                 onChange={(e) => setStudentId(e.target.value)}
                 placeholder="demo_user"
               />
-            </label>
-            <label className="control">
-              <span>API Base</span>
-              <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} />
             </label>
           </div>
           <div className="topbar__meta">
