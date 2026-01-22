@@ -533,7 +533,8 @@ export default function App() {
   };
 
   const pollAttempt = async (id: string) => {
-    for (let i = 0; i < 10; i += 1) {
+    const maxTries = 30;
+    for (let i = 0; i < maxTries; i += 1) {
       try {
         const data = await fetchJson<Attempt>(`${apiBase}/attempts/${id}`);
         setAttempt(data);
@@ -547,8 +548,9 @@ export default function App() {
         setMessage(`查询判卷失败：${(err as Error).message}`);
         return;
       }
-      await sleep(1500);
+      await sleep(2000);
     }
+    setMessage("判卷仍在处理中，请稍后刷新或再次打开作答页。");
   };
 
   const loadMistakes = async () => {
